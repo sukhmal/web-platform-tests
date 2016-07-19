@@ -13,10 +13,10 @@
     <script src=/encrypted-media/util/testmediasource.js></script>
     <script src=/encrypted-media/emesuccess.js></script>
     <script src=/encrypted-media/clearkey.js></script>
-    <script src=/encrypted-media/firefox-polyfill.js></script>
-    <script src=/encrypted-media/chrome-polyfill.js></script>
-    <script src=/encrypted-media/clearkey-polyfill.js></script>
-    
+    <script src=/encrypted-media/polyfill/firefox-polyfill.js></script>
+    <script src=/encrypted-media/polyfill/chrome-polyfill.js></script>
+    <script src=/encrypted-media/polyfill/clearkey-polyfill.js></script>
+
     <meta name="timeout" content="long">
   </head>
   <body>
@@ -27,11 +27,11 @@
     </p>
 
     <div id='log'></div>
-    
+
     <div id='video'></div>
 
     <script>
-    
+
         var tests = [ { audioPath:  '/encrypted-media/content/chimera_audio.mp4',
                         videoPath:  '/encrypted-media/content/chimera_video.mp4',
                         audioType:  'audio/mp4;codecs="mp4a.40.5"',
@@ -40,12 +40,12 @@
                         videoKeyId: 'AAAAAAPS_EEAAAAAAAAAAA',
                         videoKey:   'rzQTSR-sLD46a4jgU4RCBg',
                          } ];
-                        
+
         var testcases = [ ],
             allfetches = [ ];
-            
+
         tests.forEach( function( test ) {
-        
+
             // Fetch the media resources
             var fetches = [ test.audioPath, test.videoPath ].map( function( path ) {
                     return fetch( path )
@@ -54,23 +54,23 @@
                         return response.arrayBuffer();
                     } );
                 } );
-                
+
             Array.prototype.push.apply( allfetches, fetches );
-                
+
             var keys = { };
             keys[ test.videoKeyId ] = test.videoKey;
-            
+
             var clearkey = new ClearKey( keys ),
                 messagehandler = clearkey.messagehandler.bind( clearkey );
-            
+
             // Construct the test cases
             [ /*undefined,*/ { initDataType: 'keyids', initData: toUtf8( { kids: [ test.videoKeyId ] } ) } ]
             .forEach( function( initData ) {
-              
+
                 [ 'temporary', 'persistent-usage-record', 'persistent-license' ].forEach( function( sessiontype ) {
-                
+
                     [ true, false ].forEach( function( attachsrcfirst ) {
-                  
+
                         var config = {  element:            document.getElementById('video'),
                                         keysystem:          'org.w3.clearkey',
                                         sessiontype:        sessiontype,
@@ -82,9 +82,9 @@
                                         audioIndex:         allfetches.length - 2,
                                         videoIndex:         allfetches.length - 1,
                                         duration:           5 },
-                            
+
                             testname = sessiontype + ';' + attachsrcfirst + ';';
-                        
+
                         if ( initData )
                         {
                             config.initDataType = initData.initDataType;
@@ -94,32 +94,32 @@
                         {
                             config.initDataType = test.initDataType;
                         }
-                        
+
                         testname = testname + config.initDataType;
-                        
+
                         config.configuration = {    initDataTypes: [ config.initDataType ],
                                                     audioCapabilities: [ { contentType: config.audioType } ],
                                                     videoCapabilities: [ { contentType: config.videoType } ],
                                                     sessionTypes: [ config.sessiontype ] };
-                        
+
                         testcases.push( { name: testname, config: config } );
                     } );
                 } );
             } );
         } );
-        
+
         // Wait for the media to fetch and execute the test cases
         Promise.all( allfetches )
         .then( function( resources )
         {
             // Execute the test cases
             testcases.forEach( function( testcase ) {
-            
+
                 testcase.config.audioMedia = resources[ testcase.config.audioIndex ];
                 testcase.config.videoMedia = resources[ testcase.config.videoIndex ];
-            
+
                 eme_success( testcase.name, testcase.config );
-            
+
             } );
         } );
 

@@ -1,0 +1,270 @@
+<!doctype html>
+<meta name="timeout" content="long">
+<html>
+  <head>
+    <meta charset=utf-8>
+    <title>Encrypted Media Extensions ClearKey Success</title>
+    <link rel="help" href="https://w3c.github.io/encrypted-media/">
+
+    <script src=/resources/testharness.js></script>
+    <script src=/resources/testharnessreport.js></script>
+    <script src=/encrypted-media/util/utils.js></script>
+    <script src=/encrypted-media/util/utf8.js></script>
+    <script src=/encrypted-media/util/fetch.js></script>
+    <script src=/encrypted-media/util/testmediasource.js></script>
+    <script src=/encrypted-media/clearkey.js></script>
+    <script src=/encrypted-media/polyfill/firefox-polyfill.js></script>
+    <script src=/encrypted-media/polyfill/chrome-polyfill.js></script>
+    <script src=/encrypted-media/polyfill/clearkey-polyfill.js></script>
+
+    <meta name="timeout" content="long">
+  </head>
+  <body>
+    <meta name="timeout" content="long">
+    <h1 class="instructions">Description</h1>
+    <p class="instructions">
+      This test verifies success paths for the Clear Key keysystem.
+    </p>
+
+    <div id='log'></div>
+
+    <div id='video'></div>
+
+    <script>
+
+        var audioPath = '/encrypted-media/content/chimera_audio.mp4';
+        var videoPath = '/encrypted-media/content/chimera_video.mp4';
+        var audioType = 'audio/mp4;codecs="mp4a.40.5"';
+        var videoType = 'video/mp4;codecs="avc1.4D4028"';
+        var videoKeyId = 'AAAAAAPS_EEAAAAAAAAAAA';
+        var videoKey = 'rzQTSR-sLD46a4jgU4RCBg';
+        var initDataType = 'cenc';
+        var initData = getInitData(initDataType);
+
+        // Fetch the media resources
+        var fetches = [ audioPath, videoPath ].map( function( path ) {
+                return fetch( path )
+                .then( function( response ) {
+                    if ( !response.ok ) throw new Error('Resource fetch failed');
+                    return response.arrayBuffer();
+                } );
+            } );
+
+        var allfetches = [];
+        Array.prototype.push.apply( allfetches, fetches );
+
+        var keys = { };
+        keys[ videoKeyId ] = videoKey;
+
+        var clearkey = new ClearKey( keys ),
+            messagehandler = clearkey.messagehandler.bind( clearkey );
+
+        var config = {  element:            document.getElementById('video'),
+                        keysystem:          'org.w3.clearkey',
+                        sessiontype:        'persistent-license',
+                        servercertificate:  undefined,
+                        messagehandler:     messagehandler,
+                        audioType:          audioType,
+                        videoType:          videoType,
+                        audioIndex:         allfetches.length - 2,
+                        videoIndex:         allfetches.length - 1,
+                        initDataType:       initDataType,
+                        initData:           initData,
+                        duration:           5 };
+
+        var testname = 'Playback using Clear Key key system with temporary sessiontype, calling setMediaKeys() after setting src attribute.';
+
+        config.configuration = {    initDataTypes: [ config.initDataType ],
+                                    audioCapabilities: [ { contentType: config.audioType } ],
+                                    videoCapabilities: [ { contentType: config.videoType } ],
+                                    sessionTypes: [ config.sessiontype ] };
+
+        // Wait for the media to fetch and execute the test case
+        Promise.all( allfetches )
+        .then( function( resources ) {
+            config.audioMedia = resources[ config.audioIndex ];
+            config.videoMedia = resources[ config.videoIndex ];
+
+            var _video,
+                _mediaKeys,
+                _mediaKeySession,
+                _mediaSource,
+                _allKeysUsableEvent = false,
+                _waitingForKeyEvent = false,
+                _canPlayThroughEvent = false,
+                _playingEvent = false,
+                _timeupdateEvent = false,
+                _releaseSequence = false,
+                _events = [ ],
+                _done,
+                _failed;
+
+            promise_test( function( test ) {
+                window.console.log( testname + " running" );
+
+                // Create our result, which will resolve when we are done.
+                var result = new Promise(function(resolve, reject) {
+                    _done = resolve; _failed = reject;
+                }).then( function() {
+                    window.console.log( testname + " resolved" );
+                }).catch( function( reason ) {
+                    window.console.log( testname + " failed" );
+                    window.console.log( "reason : " + reason);
+                    return Promise.reject( reason );
+                });
+
+                _mediaSource = testmediasource( test, config );
+
+                navigator.requestMediaKeySystemAccess(  config.keysystem, [ config.configuration ] ).then(function(access) {
+                    return access.createMediaKeys();
+                }).then(function(mediaKeys) {
+                    _mediaKeys = mediaKeys;
+
+                    return config.servercertificate
+                            ? _mediaKeys.setServerCertificate( config.servercertificate )
+                            : true;
+                }).then(test.step_func(function(result) {
+                    assert_true( result, "SetServerCertificate returns true" );
+
+                    // Create the MediaKeySession
+                    _mediaKeySession = _mediaKeys.createSession( config.sessiontype );
+
+                    function onMessage(event) {
+                        assert_equals( event.target, _mediaKeySession );
+                        assert_true( event instanceof window.MediaKeyMessageEvent );
+                        assert_equals( event.type, 'message');
+
+                        assert_any( assert_equals,
+                                    event.messageType,
+                                    _releaseSequence    ? [ 'license-release']
+                                                        : [ 'license-request', 'individualization-request' ] );
+
+                        if ( event.messageType !== 'individualization-request' ) {
+                            _events.push( event.messageType );
+                        }
+
+                        config.messagehandler( event.messageType, event.message ).then( function( response ) {
+                            if ( event.messageType === 'license-request' ) {
+                                _events.push( 'license-response' );
+                            } else if ( event.messageType === 'license-release' ) {
+                                _events.push( 'release-response' );
+                            }
+
+                            _mediaKeySession.update( response ).then( function() {
+                                _events.push('update');
+                            });
+                        });
+                    }
+
+                    function onKeyStatusesChange(event) {
+                        assert_equals(event.target, _mediaKeySession );
+                        assert_true(event instanceof window.Event );
+                        assert_equals(event.type, 'keystatuseschange' );
+
+                        var hasKeys = false, pendingKeys = false;
+                        _mediaKeySession.keyStatuses.forEach( function( value, keyid ) {
+                            assert_any( assert_equals, value, [ 'status-pending', 'usable' ] );
+
+                            hasKeys = true;
+                            pendingKeys = pendingKeys || ( value === 'status-pending' );
+
+                        });
+
+                        if ( !_allKeysUsableEvent && hasKeys && !pendingKeys ) {
+                            _allKeysUsableEvent = true;
+                            _events.push( 'allkeysusable' );
+
+                            window.console.log("Set media keys");
+                            _video.setMediaKeys(_mediaKeys);
+                        }
+
+                        if ( !hasKeys ) {
+                            _events.push( 'emptykeyslist' );
+                        }
+                    }
+
+                    function onClosed(event) {
+                        window.console.log( testname + ' closed' );
+                        assert_array_equals( _events,
+                                            [
+                                                'generaterequest',
+                                                'license-request',
+                                                'license-response',
+                                                'update',
+                                                'allkeysusable',
+                                                'playing',
+                                                'remove',
+                                                'emptykeyslist',        // This is expected per spec, but not implemented on Chrome
+                                                'license-release',
+                                                'release-response'
+                                            ],
+                                            "Expected events sequence" );
+
+                        _video.src = "";
+                        _video.setMediaKeys( null ).then( _done );
+
+                        config.element.removeChild( _video );
+                    }
+
+                    // Attach event handlers
+                    _mediaKeySession.addEventListener( 'message',           test.step_func( onMessage ) );
+                    _mediaKeySession.addEventListener( 'keystatuseschange', test.step_func( onKeyStatusesChange ) );
+                    _mediaKeySession.closed.then( test.step_func( onClosed ) );
+
+                    _video = document.createElement('video');
+                    _video.setAttribute( 'width', '600px' );
+                    config.element.appendChild( _video );
+
+                    function onEncrypted(event) {
+                        assert_equals(event.target, _video);
+                        assert_true(event instanceof window.MediaEncryptedEvent);
+                        assert_equals(event.type, 'encrypted');
+
+                        _mediaKeySession.generateRequest(   config.initDataType || event.initDataType, config.initData || event.initData ).then( function() {
+                            _events.push( 'generaterequest' );
+                        });
+                    }
+
+                    function onPlaying(event) {
+                        _playingEvent = true;
+                        _events.push( 'playing' );
+                    }
+
+                    function onTimeupdate(event) {
+                        if ( _video.currentTime > ( config.duration || 5 ) && !_timeupdateEvent ) {
+                            _timeupdateEvent = true;
+                            _video.pause();
+
+                            if ( config.sessiontype === 'temporary' ) {
+                                _mediaKeySession.close().then( function() {
+                                    _events.push( 'close' );
+                                });
+                            } else {
+                                _releaseSequence = true;
+
+                                _mediaKeySession.remove().then( function() {
+                                    _events.push( 'remove' );
+                                });
+                            }
+                        }
+                    }
+
+                    _video.addEventListener( 'encrypted',      test.step_func( onEncrypted ) );
+                    _video.addEventListener( 'playing',        test.step_func( onPlaying ) );
+                    _video.addEventListener( 'timeupdate',     test.step_func( onTimeupdate ) );
+
+                })).then(function() {
+                    window.console.log("Set video source attribute");
+                    _video.src = URL.createObjectURL(_mediaSource);
+                    _video.play();
+                }).catch(test.step_func(function(error) {
+                    _failed(error);
+                }));
+
+                return result;
+            }, testname);
+        });
+
+    </script>
+  </body>
+</html>
