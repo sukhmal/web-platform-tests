@@ -59,7 +59,6 @@ function getKeySystem() {
     if(userAgent.indexOf('chrome') > -1) {
         keysystem = 'com.widevine.alpha';
     }
-    window.console.log(userAgent + " --> " + keysystem);
 
     return keysystem;
 }
@@ -74,4 +73,32 @@ function waitForEventAndRunStep(eventName, element, func, stepTest)
         eventCallback = stepTest.step_func(eventCallback);
 
     element.addEventListener(eventName, eventCallback, true);
+}
+
+var consoleDiv = null;
+
+function consoleWrite(text)
+{
+    if (!consoleDiv && document.body) {
+        consoleDiv = document.createElement('div');
+        document.body.appendChild(consoleDiv);
+    }
+    var span = document.createElement('span');
+    span.appendChild(document.createTextNode(text));
+    span.appendChild(document.createElement('br'));
+    consoleDiv.appendChild(span);
+}
+
+function forceTestFailureFromPromise(test, error, message)
+{
+    // Promises convert exceptions into rejected Promises. Since there is
+    // currently no way to report a failed test in the test harness, errors
+    // are reported using force_timeout().
+    if (message)
+        consoleWrite(message + ': ' + error.message);
+    else if (error)
+        consoleWrite(error);
+
+    test.force_timeout();
+    test.done();
 }
