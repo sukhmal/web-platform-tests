@@ -1,38 +1,106 @@
 function messagehandler(messageType, message) {
 
-    const keySystems = {
-        'com.widevine.alpha': {
-            responseType: 'json',
-            getLicenseMessage: function(response) {
-                return BASE64.decodeArray(response.license);
-            },
-            getErrorResponse: function(response) {
-                return response;
-            },
-            getLicenseRequestFromMessage: function(message) {
-                return new Uint8Array(message);
-            },
-            getRequestHeadersFromMessage: function(/*message*/) {
-                return null;
-            }
-        },
-        'com.microsoft.playready': {
-            responseType: 'arraybuffer',
-            getLicenseMessage: function(response) {
-                return response;
-            },
-            getErrorResponse: function(response) {
-                return String.fromCharCode.apply(null, new Uint8Array(response));
-            },
-            getLicenseRequestFromMessage: function(message) {
-                // TODO: Add playready specific stuff.
-                return message;
-            },
-            getRequestHeadersFromMessage: function(message) {
-                // TODO: Add playready specific stuff.
-                return null;
-            }
+    function getKeySystemSupport(keysystem) {
+        var keySystemSupport = undefined;
+        switch(keysystem) {
+            case 'com.widevine.alpha':
+                keySystemSupport = {
+                    responseType: 'json',
+                    getLicenseMessage: function(response) {
+                        return BASE64.decodeArray(response.license);
+                    },
+                    getErrorResponse: function(response) {
+                        return response;
+                    },
+                    getLicenseRequestFromMessage: function(message) {
+                        return new Uint8Array(message);
+                    },
+                    getRequestHeadersFromMessage: function(/*message*/) {
+                        return null;
+                    }
+                };
+            break;
+            case 'com.chromecast.playready':
+                keySystemSupport = {
+                    responseType: 'arraybuffer',
+                    getLicenseMessage: function(response) {
+                        return response;
+                    },
+                    getErrorResponse: function(response) {
+                        return String.fromCharCode.apply(null, new Uint8Array(response));
+                    },
+                    getLicenseRequestFromMessage: function(message) {
+                        var msg;
+                        var licenseRequest = null;
+                        var dataview = new Uint8Array(message);
+
+                        licenseRequest = String.fromCharCode.apply(null, dataview);
+
+                        return licenseRequest;
+                    },
+                    getRequestHeadersFromMessage: function(/*message*/) {
+                        var headers = {};
+
+                        headers['Content-Type'] = 'text/xml';
+                        return headers;
+                    }
+                };
+            break;
+            case 'com.microsoft.playready':
+                keySystemSupport = {
+                    responseType: 'arraybuffer',
+                    getLicenseMessage: function(response) {
+                        return response;
+                    },
+                    getErrorResponse: function(response) {
+                        return String.fromCharCode.apply(null, new Uint16Array(response));
+                    },
+                    getLicenseRequestFromMessage: function(message) {
+                        var msg,
+                            xmlDoc;
+                        var licenseRequest = null;
+                        var parser = new DOMParser();
+                        var dataview = new Uint16Array(message);
+
+                        msg = String.fromCharCode.apply(null, dataview);
+                        xmlDoc = parser.parseFromString(msg, 'application/xml');
+
+                        if (xmlDoc.getElementsByTagName('Challenge')[0]) {
+                            var Challenge = xmlDoc.getElementsByTagName('Challenge')[0].childNodes[0].nodeValue;
+                            if (Challenge) {
+                                licenseRequest = BASE64.decode(Challenge);
+                            }
+                        }
+                        return licenseRequest;
+                    },
+                    getRequestHeadersFromMessage: function(message) {
+                        var msg,
+                            xmlDoc;
+                        var headers = {};
+                        var parser = new DOMParser();
+                        var dataview = new Uint16Array(message);
+
+                        msg = String.fromCharCode.apply(null, dataview);
+                        xmlDoc = parser.parseFromString(msg, 'application/xml');
+
+                        var headerNameList = xmlDoc.getElementsByTagName('name');
+                        var headerValueList = xmlDoc.getElementsByTagName('value');
+                        for (var i = 0; i < headerNameList.length; i++) {
+                            headers[headerNameList[i].childNodes[0].nodeValue] = headerValueList[i].childNodes[0].nodeValue;
+                        }
+                        // some versions of the PlayReady CDM return 'Content' instead of 'Content-Type'.
+                        // this is NOT w3c conform and license servers may reject the request!
+                        // -> rename it to proper w3c definition!
+                        if (headers.hasOwnProperty('Content')) {
+                            headers['Content-Type'] = headers.Content;
+                            delete headers.Content;
+                        }
+                        return headers;
+                    }
+                };
+            break;
         }
+        return keySystemSupport;
     };
 
     return new Promise(function(resolve, reject) {
@@ -41,6 +109,7 @@ function messagehandler(messageType, message) {
 
             var keysystem = getKeySystem(),
                 protData = response[keysystem],
+                keySystemSupport = getKeySystemSupport(keysystem),
                 url = undefined,
                 reqheaders = {},
                 credentials = undefined;
@@ -80,7 +149,7 @@ function messagehandler(messageType, message) {
                 updateHeaders(protData.httpRequestHeaders);
             }
 
-            updateHeaders(keySystems[keysystem].getRequestHeadersFromMessage(message));
+            updateHeaders(keySystemSupport.getRequestHeadersFromMessage(message));
 
             // Set withCredentials property from protData
             if (protData && protData.withCredentials) {
@@ -91,16 +160,20 @@ function messagehandler(messageType, message) {
                 method: 'POST',
                 headers: reqheaders,
                 credentials: credentials,
-                body: keySystems[keysystem].getLicenseRequestFromMessage(message)
+                body: keySystemSupport.getLicenseRequestFromMessage(message)
             }).then(function(response) {
                 if(response.status !== 200) {
-                    reject('DRM: ' + keySystemString + ' update, XHR status is "' + response.statusText + '" (' + response.status + '), expected to be 200. readyState is ' + response.readyState + '.  Response is ' + ((response) ? keySystems[keysystem].getErrorResponse(response) : 'NONE'));
+                    reject('DRM: ' + keysystem + ' update, XHR status is "' + response.statusText + '" (' + response.status + '), expected to be 200. readyState is ' + response.readyState + '.  Response is ' + ((response) ? keySystemSupport.getErrorResponse(response) : 'NONE'));
                     return;
                 } else {
-                    return response.json();
+                    if(keySystemSupport.responseType === 'json') {
+                        return response.json();
+                    } else if(keySystemSupport.responseType === 'arraybuffer') {
+                        return response.arrayBuffer();
+                    }
                 }
             }).then(function(response){
-                resolve(keySystems[keysystem].getLicenseMessage(response));
+                resolve(keySystemSupport.getLicenseMessage(response));
             }).catch(function(error) {
                 reject(error);
                 return;
