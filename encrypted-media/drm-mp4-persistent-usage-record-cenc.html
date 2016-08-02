@@ -13,7 +13,10 @@
     <script src=/encrypted-media/util/testmediasource.js></script>
     <script src=/encrypted-media/util/base64.js></script>
     <script src=/encrypted-media/util/drmtoday-messagehandler.js></script>
+    <script src=/encrypted-media/polyfill/cast-polyfill.js></script>
+    <script src=/encrypted-media/polyfill/edge-polyfill.js></script>
     <script src=/encrypted-media/js/playback-persistent-usage-record.js></script>
+    <script src=https://www.gstatic.com/cast/sdk/libs/receiver/2.0.0/cast_receiver.js></script>
 
     <meta name="timeout" content="long">
   </head>
@@ -31,6 +34,7 @@
     </div>
 
     <script>
+        document.body.style.backgroundColor = "white";
         var config = {  video:              document.getElementById('videoelement'),
                         keysystem:          getKeySystem(),
                         sessiontype:        'persistent-usage-record',
@@ -47,7 +51,7 @@
         config.configuration = {    initDataTypes: [ config.initDataType ],
                                     audioCapabilities: [ { contentType: config.audioType } ],
                                     videoCapabilities: [ { contentType: config.videoType } ],
-                                    sessionTypes: [ config.sessiontype ] };
+                                    sessionTypes: [ "persistent-license" ] };
 
         runTest(config, testname);
 
